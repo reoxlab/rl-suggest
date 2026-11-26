@@ -1,6 +1,6 @@
 {
   "name": "rl-suggest",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Buzón de sugerencias compartido por las herramientas web de Reox Lab (mailto)",
   "type": "module",
   "license": "GPL-3.0-or-later",
