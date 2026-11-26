@@ -23,7 +23,7 @@ Desde GitHub:
 npm install git+https://github.com/reoxlab/rl-suggest.git
 ```
 
-O desde Gitea:
+O desde Gitea (espejo privado; requiere autenticación):
 
 ```sh
 npm install git+https://git.reoxlab.com/fpena/rl-suggest.git
@@ -42,9 +42,8 @@ const container = document.querySelector<HTMLElement>('#suggest-root')!
 const suggest = renderSuggestBox(container, {
   toolName: 'TableRL',
   // Opcional: registrar analítica cuando el usuario pulsa «Enviar sugerencia».
-  onSend: () => {
-    window.umami?.track('suggest-open', { tool: 'TableRL' })
-  },
+  // `track()` es el helper local de cada app (Umami con try/catch y `?.`).
+  onSend: () => track('tablerl-suggest-send'),
 })
 
 // Al desmontar o cambiar de vista, quita los listeners y elimina la sección:
@@ -61,6 +60,7 @@ suggest.dispose()
 | `intro` | `string` | `'Cuéntanos qué mejorarías o qué echas en falta. Se abre tu app de correo con el mensaje listo; no se envía nada sin que tú lo envíes.'` | Texto introductorio bajo el título. |
 | `placeholder` | `string` | `'Escribe tu sugerencia…'` | Placeholder del `<textarea>`. |
 | `submitLabel` | `string` | `'Enviar sugerencia'` | Etiqueta del botón principal. |
+| `maxLength` | `number` | `500` | Longitud máxima del `<textarea>` (con contador `n/500 caracteres`). El `mailto:` codificado crece con el texto: 500 es el límite práctico para que la URL no se trunque en los clientes de correo. |
 | `onSend` | `(text: string) => void` | `undefined` | Callback opcional que recibe el texto ya recortado al pulsar enviar. |
 
 ## Funciones puras
@@ -95,10 +95,13 @@ const href = buildSuggestMailto('TableRL', 'Me gustaría exportar a CSV')
 
 - El botón de envío permanece deshabilitado mientras el `<textarea>` esté
   vacío o solo contenga espacios.
-- Al pulsar «Enviar sugerencia» se abre `window.location.href = mailto`, se
-  llama a `onSend?.(textoRecortado)`, se muestra un aviso de confirmación y el
-  texto escrito **no** se borra por si el usuario necesita copiarlo o volver a
-  intentarlo.
+- Al pulsar «Enviar sugerencia» se llama a `onSend?.(textoRecortado)`, se
+  abre `window.location.href = mailto` y se muestra un aviso de
+  confirmación; el texto escrito **no** se borra por si el usuario
+  necesita copiarlo o volver a intentarlo.
+- El `<textarea>` tiene `maxlength` 500 por defecto (opción `maxLength`)
+  con contador visible; los saltos de línea del cuerpo se normalizan a
+  CRLF (`%0D%0A`, RFC 6068).
 - El enlace directo `mailto:` incluye un botón «Copiar correo» que usa
   `navigator.clipboard.writeText` con respaldo clásico (`execCommand('copy')`)
   y muestra un aviso con la dirección si la copia falla.
@@ -127,10 +130,24 @@ para evitar cambios inesperados al reinstalar:
 ```json
 {
   "dependencies": {
-    "rl-suggest": "github:reoxlab/rl-suggest#<commit>"
+    "rl-suggest": "git+https://github.com/reoxlab/rl-suggest.git#<commit>"
   }
 }
 ```
+
+Usa el transporte `git+https`, no el atajo `github:`: npm lo normaliza a
+`git+ssh` en el lockfile y el build de Docker en Skynet no tiene claves
+SSH (el `Dockerfile` lleva además `RUN apk add --no-cache git` antes de
+`npm install`/`npm ci`).
+
+> Nota: el commit de GitHub se publica por snapshot (Contents API), así
+> que su SHA difiere del commit git de Gitea (`main`/`dev`); ambos
+> árboles son idénticos byte a byte y el pin usa el SHA de GitHub. El
+> espejo Gitea (`fpena/rl-suggest`) es privado y requiere autenticación;
+> la vía pública es GitHub.
+
+v1.0.1: centrado del bloque, límite 500 con contador, CRLF en el cuerpo,
+orden de `onSend` y menores de revisión.
 
 ## Desarrollo
 
