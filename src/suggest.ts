@@ -38,6 +38,7 @@ const DEFAULT_INTRO =
 const DEFAULT_PLACEHOLDER = 'Escribe tu sugerencia…'
 const DEFAULT_SUBMIT_LABEL = 'Enviar sugerencia'
 const DEFAULT_COPY_LABEL = 'Copiar correo'
+const DEFAULT_MAX_LENGTH = 500
 const COPIED_LABEL = '¡Copiado!'
 const COPY_FEEDBACK_MS = 2000
 const STYLE_ELEMENT_ID = 'rl-suggest-style'
@@ -48,7 +49,7 @@ export const SUGGEST_STYLE: string = `
 .rl-suggest {
   box-sizing: border-box;
   max-width: 42rem;
-  margin: 1.5rem 0;
+  margin: 1.5rem auto;
   padding: 1.25rem 1.5rem;
   background: var(--panel, #ffffff);
   color: var(--carbon, #131315);
@@ -106,6 +107,13 @@ export const SUGGEST_STYLE: string = `
 .rl-suggest .rl-suggest-text:focus-visible {
   outline: 2px solid var(--vino, #80001e);
   outline-offset: 2px;
+}
+
+.rl-suggest .rl-suggest-count {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  color: var(--texto-suave, #5b5560);
+  text-align: right;
 }
 
 .rl-suggest .rl-suggest-actions {
@@ -215,7 +223,8 @@ export function buildSuggestMailto(
 ): string {
   const subject = suggestSubject(toolName)
   const recipient = resolveEmail(email)
-  const body = typeof text === 'string' ? text.trim() : ''
+  // RFC 6068: los saltos de línea del cuerpo van como CRLF (%0D%0A).
+  const body = (typeof text === 'string' ? text.trim() : '').replace(/\r?\n/g, '\r\n')
   return `mailto:${recipient}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
 }
 
@@ -234,6 +243,10 @@ export interface SuggestBoxOptions {
   placeholder?: string
   /** Texto del botón. Por defecto 'Enviar sugerencia'. */
   submitLabel?: string
+  /** Longitud máxima del textarea. Por defecto 500 (límite práctico
+      del `mailto:`: el cuerpo codificado crece con el texto y muchos
+      clientes truncan URLs largas). */
+  maxLength?: number
   /** Se llama al pulsar «Enviar sugerencia» con el texto ya recortado
       (la app lo usa para su analítica, p. ej. evento Umami). */
   onSend?: (text: string) => void
@@ -267,6 +280,7 @@ export function renderSuggestBox(
   const introText = options.intro ?? DEFAULT_INTRO
   const placeholderText = options.placeholder ?? DEFAULT_PLACEHOLDER
   const submitLabelText = options.submitLabel ?? DEFAULT_SUBMIT_LABEL
+  const maxLength = resolveMaxLength(options.maxLength)
 
   instanceCounter += 1
   const textId = `rl-suggest-text-${instanceCounter}`
@@ -296,11 +310,16 @@ export function renderSuggestBox(
   textarea.id = textId
   textarea.className = 'rl-suggest-text'
   textarea.setAttribute('rows', '4')
-  textarea.setAttribute('maxlength', '2000')
+  textarea.setAttribute('maxlength', String(maxLength))
   textarea.setAttribute('aria-describedby', introId)
   textarea.placeholder = placeholderText
   textarea.value = ''
   section.appendChild(textarea)
+
+  const count = doc.createElement('p')
+  count.className = 'rl-suggest-count'
+  count.textContent = `0/${maxLength} caracteres`
+  section.appendChild(count)
 
   const actions = doc.createElement('div')
   actions.className = 'rl-suggest-actions'
@@ -353,6 +372,7 @@ export function renderSuggestBox(
 
   function onInput(): void {
     updateSendDisabled()
+    count.textContent = `${textarea.value.length}/${maxLength} caracteres`
   }
 
   function onSendClick(): void {
@@ -362,11 +382,11 @@ export function renderSuggestBox(
       return
     }
     const mailto = buildSuggestMailto(options.toolName, trimmed, recipient)
+    options.onSend?.(trimmed)
     if (typeof window !== 'undefined' && window.location) {
       window.location.href = mailto
     }
-    options.onSend?.(trimmed)
-    showHint('Se abrió tu app de correo con la sugerencia lista para enviar.')
+    showHint('Se intentó abrir tu app de correo con la sugerencia lista para enviar.')
   }
 
   function markCopied(): void {
@@ -375,6 +395,7 @@ export function renderSuggestBox(
       clearTimeout(copyTimer)
     }
     copyButton.textContent = COPIED_LABEL
+    showHint('Correo copiado.')
     copyTimer = setTimeout(() => {
       copyTimer = undefined
       if (!disposed) {
@@ -428,6 +449,14 @@ function resolveEmail(email?: string): string {
     return email.trim()
   }
   return SUGGEST_EMAIL_DEFAULT
+}
+
+function resolveMaxLength(maxLength?: number): number {
+  if (maxLength === undefined) return DEFAULT_MAX_LENGTH
+  if (!Number.isInteger(maxLength) || maxLength <= 0) {
+    throw new TypeError('rl-suggest: `maxLength` debe ser un entero positivo')
+  }
+  return maxLength
 }
 
 function isElementLike(value: unknown): value is HTMLElement {
