@@ -241,9 +241,9 @@ const mailtoSpecial = buildSuggestMailto(
 )
 assert.equal(
   mailtoSpecial,
-  `mailto:contacto@reoxlab.com?subject=${encodeURIComponent('[Sugerencia DifRL]')}&body=${encodeURIComponent('Acentos: áéíóúñ & símbolos ?x=1\nsegunda línea')}`,
+  `mailto:contacto@reoxlab.com?subject=${encodeURIComponent('[Sugerencia DifRL]')}&body=${encodeURIComponent('Acentos: áéíóúñ & símbolos ?x=1\r\nsegunda línea')}`,
 )
-assert.ok(mailtoSpecial.includes('%0A'), 'los saltos de línea deben codificarse como %0A')
+assert.ok(mailtoSpecial.includes('%0D%0A'), 'los saltos de línea deben codificarse como %0D%0A (CRLF, RFC 6068)')
 assert.ok(mailtoSpecial.includes('%26'), 'el carácter & debe codificarse como %26')
 assert.ok(mailtoSpecial.includes('%3F'), 'el carácter ? debe codificarse como %3F')
 assert.ok(mailtoSpecial.includes('%3D'), 'el carácter = debe codificarse como %3D')
@@ -260,6 +260,18 @@ assert.equal(
 
 assert.throws(() => buildSuggestMailto('', 'Texto'), TypeError)
 assert.throws(() => buildSuggestMailto('   ', 'Texto'), TypeError)
+
+// toolName con espacios también se recorta en buildSuggestMailto
+assert.equal(
+  buildSuggestMailto('  TableRL  ', 'x'),
+  'mailto:contacto@reoxlab.com?subject=%5BSugerencia%20TableRL%5D&body=x',
+)
+
+// Límite práctico: 500 caracteres con acentos (peor caso, 6 por
+// carácter codificado + ~70 de esquema/asunto) quedan por debajo de 3200.
+const longText = 'á'.repeat(500)
+const longMailto = buildSuggestMailto('TableRL', longText)
+assert.ok(longMailto.length < 3200, `mailto con 500 acentos: ${longMailto.length} caracteres`)
 
 // -- 2. CSS exportado (theme-aware y encapsulado) ----------------------------
 
@@ -340,11 +352,13 @@ const sendButton = section.find((el) => el.className === 'rl-suggest-send')!
 const hint = section.find((el) => el.className === 'rl-suggest-hint')!
 const mailLink = section.find((el) => el.tagName === 'a')!
 const copyButton = section.find((el) => el.className === 'rl-suggest-copy')!
+const count = section.find((el) => el.className === 'rl-suggest-count')!
 
-assert.ok(label && textarea && sendButton && hint && mailLink && copyButton)
+assert.ok(label && textarea && sendButton && hint && mailLink && copyButton && count)
+assert.equal(count.textContent, '0/500 caracteres')
 assert.equal(label.getAttribute('for'), textarea.id)
 assert.equal(textarea.getAttribute('rows'), '4')
-assert.equal(textarea.getAttribute('maxlength'), '2000')
+assert.equal(textarea.getAttribute('maxlength'), '500')
 assert.equal(sendButton.type, 'button')
 assert.equal(copyButton.type, 'button')
 assert.equal(mailLink.getAttribute('href'), 'mailto:contacto@reoxlab.com')
@@ -359,6 +373,7 @@ assert.equal(sendButton.disabled, true)
 textarea.value = '  Agregar exportación a CSV  '
 textarea.dispatch('input')
 assert.equal(sendButton.disabled, false)
+assert.equal(count.textContent, `${textarea.value.length}/500 caracteres`)
 
 // Al pulsar Enviar: abre mailto, dispara onSend con texto recortado, muestra hint y NO borra textarea
 sendButton.dispatch('click')
@@ -370,7 +385,7 @@ assert.deepEqual(sentTexts, ['Agregar exportación a CSV'])
 assert.equal(hint.hidden, false)
 assert.equal(
   hint.textContent,
-  'Se abrió tu app de correo con la sugerencia lista para enviar.',
+  'Se intentó abrir tu app de correo con la sugerencia lista para enviar.',
 )
 assert.equal(textarea.value, '  Agregar exportación a CSV  ')
 
@@ -378,6 +393,12 @@ assert.equal(textarea.value, '  Agregar exportación a CSV  ')
 textarea.value = ''
 textarea.dispatch('input')
 assert.equal(sendButton.disabled, true)
+
+// Clic en enviar con solo espacios: no abre mailto ni llama a onSend
+locationStub.href = ''
+sendButton.dispatch('click')
+assert.equal(locationStub.href, '')
+assert.equal(sentTexts.length, 1)
 
 // Copiar correo con navigator.clipboard.writeText
 const copiedValues: string[] = []
@@ -415,6 +436,41 @@ assert.ok(section2.toHTML().includes('Comentarios'))
 assert.ok(section2.toHTML().includes('Abrir correo'))
 assert.ok(section2.toHTML().includes('mailto:soporte@reoxlab.com'))
 
+// title/intro con HTML no se interpretan como HTML (van como texto)
+const container3 = doc.createElement('div')
+doc.body.appendChild(container3)
+const handle3 = renderSuggestBox(container3 as unknown as HTMLElement, {
+  toolName: 'TableRL',
+  title: '<b>Negrita</b>',
+  intro: 'Texto <script>alert(1)</script> normal',
+})
+const section3 = handle3.element as unknown as FakeElement
+const heading3 = section3.find((el) => el.tagName === 'h2')!
+const intro3 = section3.find((el) => el.className === 'rl-suggest-intro')!
+assert.equal(heading3.children.length, 0)
+assert.equal(heading3.textContent, '<b>Negrita</b>')
+assert.equal(intro3.children.length, 0)
+assert.equal(intro3.textContent, 'Texto <script>alert(1)</script> normal')
+handle3.dispose()
+assert.equal(container3.children.length, 0)
+
+// Rechazo de navigator.clipboard.writeText cae al respaldo execCommand
+Object.defineProperty(globalThis, 'navigator', {
+  configurable: true,
+  value: {
+    clipboard: {
+      writeText: async (_value: string) => {
+        throw new Error('permiso denegado')
+      },
+    },
+  },
+})
+doc.execCommandResult = true
+copyButton.dispatch('click')
+await flushMicrotasks()
+assert.equal(copyButton.textContent, '¡Copiado!')
+assert.deepEqual(doc.execCommandCalls.slice(-1), ['copy'])
+
 // Respaldo de copia sin navigator.clipboard (execCommand + restauración de foco)
 Object.defineProperty(globalThis, 'navigator', {
   configurable: true,
@@ -426,7 +482,7 @@ copyButton2.focus()
 doc.execCommandResult = true
 copyButton2.dispatch('click')
 await flushMicrotasks()
-assert.deepEqual(doc.execCommandCalls, ['copy'])
+assert.deepEqual(doc.execCommandCalls.slice(-1), ['copy'])
 assert.equal(copyButton2.textContent, '¡Copiado!')
 assert.equal(doc.activeElement, copyButton2)
 
@@ -437,12 +493,22 @@ await flushMicrotasks()
 assert.equal(hint2.hidden, false)
 assert.equal(hint2.textContent, 'No se pudo copiar; el correo es soporte@reoxlab.com.')
 
+// Tras el fallo, una copia correcta limpia el aviso de error
+doc.execCommandResult = true
+copyButton2.dispatch('click')
+await flushMicrotasks()
+assert.equal(copyButton2.textContent, '¡Copiado!')
+assert.equal(hint2.textContent, 'Correo copiado.')
+assert.equal(hint2.hidden, false)
+
 // Restaurar navigator si existía
 if (originalNavigatorDescriptor) {
   Object.defineProperty(globalThis, 'navigator', originalNavigatorDescriptor)
 }
 
 // dispose() quita listeners, elimina el nodo y deja de reaccionar
+handle.dispose()
+assert.equal(container.children.length, 0)
 handle.dispose()
 assert.equal(container.children.length, 0)
 assert.equal(textarea.listeners.get('input')?.length ?? 0, 0)
